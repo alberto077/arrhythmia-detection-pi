@@ -35,9 +35,9 @@ records = ['100', '102', '103', '105', '108', '109', '112', '113']
 
 # --- Patient-wise split lists ---
 # Train on 6 patients, validate on 1, test on 1 (you can reshuffle later if you like)
-train_recs = ['100', '102', '103', '105', '108', '109']  # training subjects
-val_recs   = ['112']                                     # validation subject
-test_recs  = ['113']                                     # test subject (held out)
+train_recs = ['100', '102', '103', '108', '113', '112']  # training subjects
+val_recs   = ['105']                                     # validation subject
+test_recs  = ['109']                                     # test subject (held out)
 
 # Sampling rate for MIT-BIH ECG signals (Hz)
 fs = 360  # samples per second
@@ -139,13 +139,42 @@ X_val,   y_val   = in_recs(val_recs)    # windows from validation subject
 X_test,  y_test  = in_recs(test_recs)   # windows from held-out test subject
 
 # Add a channel dimension so shapes become:
-#   (num_windows, time, channels) -> (N, 720, 1)
+#(num_windows, time, channels) -> (N, 720, 1)
 # This matches what 1D CNNs in Keras expect.
 # Without that extra axis, Keras would see (batch, time) and complain
 # because Conv1D needs (batch, time, channels).
 X_train = X_train[..., None]
 X_val   = X_val[..., None]
 X_test  = X_test[..., None]
+
+# -----------------------------
+# Oversample ventricular beats in training set only
+# -----------------------------
+pos_idx = np.where(y_train == 1)[0]
+neg_idx = np.where(y_train == 0)[0]
+
+num_pos = len(pos_idx)
+num_neg = len(neg_idx)
+
+print(f"Before oversampling: pos={num_pos}, neg={num_neg}")
+
+# Target ratio: 1 positive for every 5 negatives
+target_pos = num_neg // 5
+
+if num_pos > 0:
+    reps = target_pos // num_pos
+    remainder = target_pos % num_pos
+
+    oversampled_pos_idx = np.concatenate([
+        np.repeat(pos_idx, reps),
+        np.random.choice(pos_idx, remainder, replace=True)
+    ])
+
+    X_train = np.concatenate([X_train[neg_idx], X_train[oversampled_pos_idx]])
+    y_train = np.concatenate([y_train[neg_idx], y_train[oversampled_pos_idx]])
+
+print(f"After oversampling: pos={np.sum(y_train==1)}, neg={np.sum(y_train==0)}")
+
 
 print("Split shapes:")
 print("  Train:", X_train.shape, y_train.shape)
@@ -179,7 +208,8 @@ print("  Test: ", X_test.shape,  y_test.shape)
 
 cnt = Counter(y_train.tolist()) # Creates the mapping {0: #, 1: #}
 w0 = 1.0
-w1 = (cnt[0] / max(1, cnt[1])) if cnt[1] > 0 else 1.0  # simple heuristic
+raw_w1 = (cnt[0] / max(1, cnt[1])) if cnt[1] > 0 else 1.0  # simple heuristic
+w1 = min(raw_w1, 20.0)
 class_weight = {0: w0, 1: w1}
 print("Class counts (train):", cnt, " -> class_weight:", class_weight)
 

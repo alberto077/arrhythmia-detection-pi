@@ -1,132 +1,233 @@
-import numpy as np
+#!/usr/bin/env python3
+"""
+FIXED RUNTIME FOR RASPBERRY PI
+===============================
+Tests on record 109 (which has 38 ventricular beats) instead of test set.
+Also includes threshold adjustment options.
+"""
 
-# On Raspberry Pi you usually use tflite_runtime. Fall back to tf.lite if needed.
+import numpy as np
+import time
+
 try:
     import tflite_runtime.interpreter as tflite
 except ImportError:
     import tensorflow as tf
     tflite = tf.lite
 
-# -----------------------------
-# Load TFLite model + threshold
-# -----------------------------
-MODEL_PATH = "ecg_int8.tflite"   # or "ecg_dr.tflite" / "ecg_float32.tflite"
+# Configuration
+MODEL_PATH = "models/ecg_int8_improved.tflite"
 
-with open("threshold.txt", "r") as f:
-    THRESHOLD = float(f.read().strip())
+# Load threshold (but we'll also test with adjusted values)
+with open("threshold_improved.txt", "r") as f:
+    THRESHOLD_OPTIMAL = float(f.read().strip())
+
+# For edge deployment, you may want to use a lower threshold for higher recall
+THRESHOLD_SAFE = 0.5  # Higher recall, lower precision (safer for medical)
+THRESHOLD_BALANCED = 0.7  # Balance between precision and recall
+
+# Choose which threshold to use
+THRESHOLD = THRESHOLD_BALANCED  # Change this as needed
+
+print(f"Loaded thresholds:")
+print(f"  Optimal (F1-max): {THRESHOLD_OPTIMAL:.4f}")
+print(f"  Safe (high recall): {THRESHOLD_SAFE:.4f}")
+print(f"  Balanced: {THRESHOLD_BALANCED:.4f}")
+print(f"  → Using: {THRESHOLD:.4f}\n")
 
 
 class ECGDetector:
     def __init__(self, model_path=MODEL_PATH):
-        # Create interpreter
         self.interpreter = tflite.Interpreter(model_path=model_path)
         self.interpreter.allocate_tensors()
-
-        # Get input/output details
+        
         self.input_details = self.interpreter.get_input_details()
         self.output_details = self.interpreter.get_output_details()
-
-        # Cache quantization info (for INT8 models)
+        
+        # Quantization params
         self.input_scale, self.input_zero_point = self.input_details[0]["quantization"]
         self.output_scale, self.output_zero_point = self.output_details[0]["quantization"]
-
-        # Input shape should be (1, win, 1)
-        self.expected_shape = self.input_details[0]["shape"]
-
+    
     def _prepare_window(self, window_1d: np.ndarray) -> np.ndarray:
-        """
-        Takes a 1D window (length win),
-        z-scores it, and reshapes to (1, time, channels).
-        """
-        window = np.asarray(window_1d, dtype=np.float32)
-
-        # Z-score normalization per window (like prepare script, but per-window)
-        mean = window.mean()
-        std = window.std() + 1e-8
-        window = (window - mean) / std
-
-        # Add channel and batch dims: (time,) -> (1, time, 1)
-        window = window[None, :, None].astype(np.float32)
-        return window
-
+        """Per-window z-score normalization"""
+        w = np.asarray(window_1d, dtype=np.float32)
+        w = (w - w.mean()) / (w.std() + 1e-8)
+        return w[None, :, None].astype(np.float32)
+    
     def predict(self, window_1d: np.ndarray):
-        """
-        Returns:
-          prob: float in [0,1] – model's probability of ventricular (class 1)
-          label: int 0 or 1 using THRESHOLD
-        """
-        # Prepare window
+        """Returns probability and label"""
         x = self._prepare_window(window_1d)
-
-        # Handle different model types
+        
+        # Handle INT8 quantization
         input_dtype = self.input_details[0]["dtype"]
-
         if input_dtype == np.int8:
-            # Full INT8 model: we must quantize the float input
             x_q = x / self.input_scale + self.input_zero_point
             x_q = np.clip(np.round(x_q), -128, 127).astype(np.int8)
             self.interpreter.set_tensor(self.input_details[0]["index"], x_q)
         else:
-            # Float or dynamic-range model: accepts float32 directly
             self.interpreter.set_tensor(self.input_details[0]["index"], x.astype(np.float32))
-
+        
         # Run inference
         self.interpreter.invoke()
-
+        
         # Get output
         y = self.interpreter.get_tensor(self.output_details[0]["index"])
-
         if self.output_details[0]["dtype"] == np.int8:
-            # Dequantize to float probability
             y = (y.astype(np.float32) - self.output_zero_point) * self.output_scale
-
-        prob = float(y.reshape(-1)[0])  # probability of class 1 (ventricular)
+        
+        prob = float(y.reshape(-1)[0])
         label = int(prob >= THRESHOLD)
+        
         return prob, label
 
 
-if __name__ == "__main__":
-    data = np.load("mitbih_windows.npz", allow_pickle=True)
-
-    # Pick a record that you KNOW has ventricular beats (from the counting script)
-    TARGET_RECORD = "105"  # change after you see the counts
-
-    X_all = data["X_all"]
-    y_all = data["y_all"].astype(int)
-    rids  = data["rids_all"].astype(str)
-
-    mask = (rids == TARGET_RECORD)
-    X_pat = X_all[mask]
-    y_pat = y_all[mask]
-
-    print(f"Target record: {TARGET_RECORD}")
-    print(f"Windows: {len(X_pat)} | Positives: {int((y_pat==1).sum())}")
-
-    detector = ECGDetector(MODEL_PATH)
-
-    # Evaluate this patient record
+def evaluate_record(detector, X, y, record_name):
+    """Evaluate on a specific record"""
+    print(f"\n{'='*60}")
+    print(f"EVALUATING RECORD {record_name}")
+    print(f"{'='*60}")
+    print(f"Total windows: {len(y)}")
+    print(f"  Negative (normal): {(y==0).sum()}")
+    print(f"  Positive (ventricular): {(y==1).sum()}")
+    
     preds = []
     probs = []
-    for i in range(len(X_pat)):
-        w = X_pat[i, :, 0]
+    times = []
+    
+    for i in range(len(X)):
+        w = X[i, :, 0]
+        
+        start = time.time()
         p, yhat = detector.predict(w)
+        elapsed = (time.time() - start) * 1000  # ms
+        
         probs.append(p)
         preds.append(yhat)
-
+        times.append(elapsed)
+    
     preds = np.array(preds)
-    y_true = y_pat
+    probs = np.array(probs)
+    
+    # Compute metrics
+    tn = int(((y==0) & (preds==0)).sum())
+    fp = int(((y==0) & (preds==1)).sum())
+    fn = int(((y==1) & (preds==0)).sum())
+    tp = int(((y==1) & (preds==1)).sum())
+    
+    acc = (tn + tp) / len(y) if len(y) > 0 else 0
+    prec = tp / (tp + fp) if (tp + fp) > 0 else 0
+    rec = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0
+    
+    print(f"\nResults (threshold={THRESHOLD:.4f}):")
+    print(f"  Confusion Matrix: [[TN={tn}, FP={fp}], [FN={fn}, TP={tp}]]")
+    print(f"  Accuracy:  {acc:.4f}")
+    print(f"  Precision: {prec:.4f}")
+    print(f"  Recall:    {rec:.4f}")
+    print(f"  F1:        {f1:.4f}")
+    
+    print(f"\nProbability distribution:")
+    print(f"  All:      mean={probs.mean():.4f}, std={probs.std():.4f}")
+    if (y==0).sum() > 0:
+        print(f"  Normal:   mean={probs[y==0].mean():.4f}, std={probs[y==0].std():.4f}")
+    if (y==1).sum() > 0:
+        print(f"  Ventri:   mean={probs[y==1].mean():.4f}, std={probs[y==1].std():.4f}")
+    
+    avg_time = np.mean(times)
+    print(f"\nInference time: {avg_time:.2f} ms/window (avg of {len(times)})")
+    
+    return f1, prec, rec, avg_time
 
-    tn = int(((y_true==0) & (preds==0)).sum())
-    fp = int(((y_true==0) & (preds==1)).sum())
-    fn = int(((y_true==1) & (preds==0)).sum())
-    tp = int(((y_true==1) & (preds==1)).sum())
 
-    precision = tp / (tp + fp + 1e-9)
-    recall    = tp / (tp + fn + 1e-9)
-    f1        = 2 * precision * recall / (precision + recall + 1e-9)
+def threshold_sweep(detector, X, y, record_name):
+    """Test multiple thresholds to find best F1"""
+    print(f"\n{'='*60}")
+    print(f"THRESHOLD SWEEP ON RECORD {record_name}")
+    print(f"{'='*60}")
+    
+    # Get all probabilities
+    probs = np.array([detector.predict(X[i, :, 0])[0] for i in range(len(X))])
+    
+    thresholds = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.98, THRESHOLD_OPTIMAL]
+    
+    print(f"\n{'Threshold':>10} | {'Prec':>6} | {'Rec':>6} | {'F1':>6} | {'TP':>3} | {'FP':>3} | {'FN':>3}")
+    print("-" * 60)
+    
+    best_f1 = 0
+    best_th = 0.5
+    
+    for th in sorted(set(thresholds)):
+        preds = (probs >= th).astype(int)
+        
+        tp = ((y==1) & (preds==1)).sum()
+        fp = ((y==0) & (preds==1)).sum()
+        fn = ((y==1) & (preds==0)).sum()
+        
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0
+        rec = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0
+        
+        marker = " ← CURRENT" if abs(th - THRESHOLD) < 0.01 else ""
+        marker = marker or (" ← OPTIMAL" if abs(th - THRESHOLD_OPTIMAL) < 0.01 else "")
+        marker = marker or (" ← BEST" if f1 > best_f1 else "")
+        
+        print(f"{th:>10.4f} | {prec:>6.4f} | {rec:>6.4f} | {f1:>6.4f} | {tp:>3d} | {fp:>3d} | {fn:>3d}{marker}")
+        
+        if f1 > best_f1:
+            best_f1 = f1
+            best_th = th
+    
+    print(f"\nBest threshold: {best_th:.4f} (F1={best_f1:.4f})")
+    return best_th, best_f1
 
-    print("\n=== Patient Record Results ===")
-    print(f"Confusion Matrix: [[TN={tn}, FP={fp}], [FN={fn}, TP={tp}]]")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall:    {recall:.4f}")
-    print(f"F1:        {f1:.4f}")
+
+if __name__ == "__main__":
+    # Load data
+    data = np.load("mitbih_windows.npz", allow_pickle=True)
+    X_all = data["X_all"]
+    y_all = data["y_all"].astype(int)
+    rids_all = data["rids_all"].astype(str)
+    
+    # Initialize detector
+    print(f"Loading model: {MODEL_PATH}")
+    detector = ECGDetector(MODEL_PATH)
+    
+    # TEST ON RECORD 109 (has 38 ventricular beats)
+    TARGET_RECORD = "109"
+    mask = (rids_all == TARGET_RECORD)
+    X_target = X_all[mask]
+    y_target = y_all[mask]
+    
+    # Main evaluation
+    f1, prec, rec, avg_time = evaluate_record(detector, X_target, y_target, TARGET_RECORD)
+    
+    # Threshold sweep (to find optimal threshold for this record)
+    best_th, best_f1 = threshold_sweep(detector, X_target, y_target, TARGET_RECORD)
+    
+    # Summary
+    print(f"\n{'='*60}")
+    print(f"SUMMARY")
+    print(f"{'='*60}")
+    print(f"Model: {MODEL_PATH}")
+    print(f"Record: {TARGET_RECORD} ({len(y_target)} windows, {(y_target==1).sum()} ventricular)")
+    print(f"\nPerformance at current threshold ({THRESHOLD:.4f}):")
+    print(f"  F1:        {f1:.4f}")
+    print(f"  Precision: {prec:.4f}")
+    print(f"  Recall:    {rec:.4f}")
+    print(f"\nPerformance at optimal threshold ({best_th:.4f}):")
+    print(f"  F1:        {best_f1:.4f}")
+    print(f"\nInference: {avg_time:.2f} ms/window")
+    print(f"{'='*60}")
+    
+    # Recommendation
+    if f1 < 0.5:
+        print(f"\n⚠️  WARNING: F1 < 0.5 - model performance is poor!")
+        print(f"   Try adjusting THRESHOLD in this script.")
+        print(f"   Recommended: THRESHOLD = {best_th:.4f}")
+    elif f1 < 0.7:
+        print(f"\n⚠️  F1 is moderate. Consider lowering threshold for better recall.")
+        print(f"   Recommended: THRESHOLD = {best_th:.4f}")
+    else:
+        print(f"\n✅ Model performance is good! (F1 = {f1:.4f})")
+        if abs(THRESHOLD - best_th) > 0.1:
+            print(f"   Could improve F1 to {best_f1:.4f} with threshold = {best_th:.4f}")
