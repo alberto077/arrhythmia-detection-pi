@@ -16,10 +16,10 @@ except ImportError:
     tflite = tf.lite
 
 # Configuration
-MODEL_PATH = "models/ecg_int8_improved.tflite"
+MODEL_PATH = "models/ecg_int8.tflite"
 
 # Load threshold (but we'll also test with adjusted values)
-with open("threshold_improved.txt", "r") as f:
+with open("threshold.txt", "r") as f:
     THRESHOLD_OPTIMAL = float(f.read().strip())
 
 # For edge deployment, you may want to use a lower threshold for higher recall
@@ -27,7 +27,7 @@ THRESHOLD_SAFE = 0.5  # Higher recall, lower precision (safer for medical)
 THRESHOLD_BALANCED = 0.7  # Balance between precision and recall
 
 # Choose which threshold to use
-THRESHOLD = THRESHOLD_BALANCED  # Change this as needed
+THRESHOLD = THRESHOLD_OPTIMAL  # Change this as needed
 
 print(f"Loaded thresholds:")
 print(f"  Optimal (F1-max): {THRESHOLD_OPTIMAL:.4f}")

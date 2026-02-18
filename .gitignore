@@ -1,20 +1,27 @@
-.venv/
-venv/
-
-.DS_Store
-
+# Python
 __pycache__/
 *.pyc
+.venv/
 
+# IDE & OS
+.idea/
+.DS_Store
+
+# Data
 data/
 *.npz
 
-*.tflite
+#Debugging
+testing/
+# Training artifacts
 *.keras
-best.keras
-threshold.txt
+models/best.keras
+models/*.h5
 
-deploy_pi/
-cisepi@*/
+# Optional model variants (keep only INT8)
+models/ecg_float32.tflite
+models/ecg_dr.tflite
 
-*.ipynb_checkpoints
+# Debug tools
+diagnose_*.py
+*_improved.py

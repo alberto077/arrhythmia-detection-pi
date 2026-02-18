@@ -48,11 +48,12 @@ y_train = y_all[train_mask]
 
 print(f"   Training set (natural distribution):")
 print(f"      Total: {len(y_train)}")
-print(f"      Negative: {(y_train==0).sum()} ({100*(y_train==0).sum()/len(y_train):.1f}%)")
-print(f"      Positive: {(y_train==1).sum()} ({100*(y_train==1).sum()/len(y_train):.1f}%)")
+print(f"      Negative: {(y_train == 0).sum()} ({100 * (y_train == 0).sum() / len(y_train):.1f}%)")
+print(f"      Positive: {(y_train == 1).sum()} ({100 * (y_train == 1).sum() / len(y_train):.1f}%)")
 
 # Compute class weights for natural distribution
 from collections import Counter
+
 cnt = Counter(y_train.tolist())
 w0 = 1.0
 w1 = cnt[0] / max(1, cnt[1]) if cnt[1] > 0 else 1.0
@@ -65,12 +66,11 @@ print(f"   (Positive class weight = {w1:.1f}x)")
 # Check validation set
 print(f"\n   Validation set:")
 print(f"      Total: {len(y_val)}")
-print(f"      Negative: {(y_val==0).sum()} ({100*(y_val==0).sum()/len(y_val):.1f}%)")
-print(f"      Positive: {(y_val==1).sum()} ({100*(y_val==1).sum()/len(y_val):.1f}%)")
+print(f"      Negative: {(y_val == 0).sum()} ({100 * (y_val == 0).sum() / len(y_val):.1f}%)")
+print(f"      Positive: {(y_val == 1).sum()} ({100 * (y_val == 1).sum() / len(y_val):.1f}%)")
 
 if (y_val == 1).sum() == 0:
     print("   ⚠️  WARNING: Validation has no positives - metrics will be incomplete!")
-
 
 # BUILD IMPROVED ARCHITECTURE
 print(f"\n2. Building improved model...")
@@ -136,7 +136,7 @@ print(f"\n3. Training improved model...")
 
 callbacks = [
     keras.callbacks.ModelCheckpoint(
-        'models/best_improved.keras',
+        'models/best.keras',
         monitor='val_auc',
         mode='max',
         save_best_only=True,
@@ -179,7 +179,7 @@ if (y_val == 1).sum() > 0:
     f1 = 2 * prec * rec / (prec + rec + 1e-9)
     best_idx = np.nanargmax(f1)
     best_th = float(th[max(0, best_idx - 1)]) if len(th) > 0 else 0.5
-    
+
     print(f"   Optimal threshold: {best_th:.4f}")
     print(f"   F1 at threshold: {f1[best_idx]:.4f}")
     print(f"   Precision: {prec[best_idx]:.4f}")
@@ -212,33 +212,35 @@ print(f"\n6. Exporting TFLite models...")
 # Float32
 conv = tf.lite.TFLiteConverter.from_keras_model(model)
 tflite_float32 = conv.convert()
-with open("models/ecg_float32_improved.tflite", "wb") as f:
+with open("models/ecg_float32.tflite", "wb") as f:
     f.write(tflite_float32)
-print(f"   ✅ ecg_float32_improved.tflite")
+print(f"   ✅ ecg_float32.tflite")
 
 # Dynamic range
 conv = tf.lite.TFLiteConverter.from_keras_model(model)
 conv.optimizations = [tf.lite.Optimize.DEFAULT]
 tflite_dr = conv.convert()
-with open("models/ecg_dr_improved.tflite", "wb") as f:
+with open("models/ecg_dr.tflite", "wb") as f:
     f.write(tflite_dr)
-print(f"   ✅ ecg_dr_improved.tflite")
+print(f"   ✅ ecg_dr.tflite")
+
 
 # Full INT8 with stratified representative dataset
 def representative_dataset():
     pos_idx = np.where(y_train == 1)[0]
     neg_idx = np.where(y_train == 0)[0]
-    
+
     # Ensure positives are well-represented in calibration
     n_pos = min(100, len(pos_idx))  # More positives than before
     n_neg = 400
-    
+
     rng = np.random.default_rng(0)
     selected_pos = rng.choice(pos_idx, size=n_pos, replace=False)
     selected_neg = rng.choice(neg_idx, size=n_neg, replace=False)
-    
+
     for i in np.concatenate([selected_pos, selected_neg]):
-        yield [X_train[i:i+1].astype(np.float32)]
+        yield [X_train[i:i + 1].astype(np.float32)]
+
 
 conv = tf.lite.TFLiteConverter.from_keras_model(model)
 conv.optimizations = [tf.lite.Optimize.DEFAULT]
@@ -247,51 +249,34 @@ conv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
 conv.inference_input_type = tf.int8
 conv.inference_output_type = tf.int8
 tflite_int8 = conv.convert()
-with open("models/ecg_int8_improved.tflite", "wb") as f:
+with open("models/ecg_int8.tflite", "wb") as f:
     f.write(tflite_int8)
-print(f"   ✅ ecg_int8_improved.tflite")
+print(f"   ✅ ecg_int8.tflite")
 
 # Save threshold
-with open("threshold_improved.txt", "w") as f:
+with open("threshold.txt", "w") as f:
     f.write(str(best_th))
-print(f"   ✅ threshold_improved.txt")
+print(f"   ✅ threshold.txt")
 
-# TEST ON RECORD 105
-print(f"\n7. Testing on record 105...")
-
-mask = (rids_all == '105')
-X_105 = X_all[mask]
-y_105 = y_all[mask]
-
-probs_105 = model.predict(X_105, batch_size=1024, verbose=0).ravel()
-preds_105 = (probs_105 >= best_th).astype(int)
-
-tn = ((y_105 == 0) & (preds_105 == 0)).sum()
-fp = ((y_105 == 0) & (preds_105 == 1)).sum()
-fn = ((y_105 == 1) & (preds_105 == 0)).sum()
-tp = ((y_105 == 1) & (preds_105 == 1)).sum()
-
-prec = tp / (tp + fp + 1e-9)
-rec = tp / (tp + fn + 1e-9)
-f1 = 2 * prec * rec / (prec + rec + 1e-9)
-
-print(f"   Record 105 results:")
-print(f"      Confusion: TN={tn} FP={fp} FN={fn} TP={tp}")
-print(f"      Precision: {prec:.4f}")
-print(f"      Recall: {rec:.4f}")
-print(f"      F1: {f1:.4f}")
+# VALIDATION SET SUMMARY
+# Note: Record 105 is the VALIDATION set (used for threshold tuning above).
+# We do NOT re-evaluate it here to avoid confusion with the true test set (record 109).
+# The threshold was already selected based on validation performance in step 4.
+print(f"\n7. Summary of splits used:")
+print(f"   Train:      Records 100,102,103,108,112,113 (weights learned here)")
+print(f"   Validation: Record 105 (threshold tuned here, val_auc monitored)")
+print(f"   Test:       Record 109 (held-out, evaluated once in step 5)")
 
 print("\n" + "=" * 80)
 print("TRAINING COMPLETE")
 print("=" * 80)
-print(f"\n✅ Improved models exported")
-print(f"✅ Key changes:")
+print(f"\n✅ Models saved to models/")
+print(f"✅ Key architectural changes from v1:")
 print(f"   1. Removed oversampling (uses natural distribution + class weights)")
 print(f"   2. Increased capacity: {total_params:,} params (vs 11,233 original)")
-print(f"   3. Replaced GlobalAvgPool with Flatten (preserves timing)")
+print(f"   3. Replaced GlobalAvgPool with Flatten (preserves QRS timing)")
 print(f"   4. Deeper architecture (64→128→256 filters)")
-print(f"\nExpected improvements:")
-print(f"   - Better probability calibration (no distribution mismatch)")
-print(f"   - Higher capacity for learning QRS morphology")
-print(f"   - Preserved temporal information (where in window QRS occurs)")
+print(f"\n✅ Evaluation:")
+print(f"   - Validation (record 105): threshold tuned in step 4")
+print(f"   - Test (record 109): held-out results in step 5")
 print("=" * 80)
