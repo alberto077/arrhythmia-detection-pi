@@ -43,12 +43,12 @@ x = layers.Activation('relu')(x)
 x = layers.MaxPooling1D(2)(x)
 x = layers.Dropout(0.3)(x)
 
-# # Bottleneck fix: reduce temporal size and channel count before flattening
-# x = layers.Conv1D(128, 3, padding='same', name='conv4')(x)
-# x = layers.BatchNormalization()(x)
-# x = layers.Activation('relu')(x)
-# x = layers.MaxPooling1D(2)(x)
-# x = layers.Dropout(0.3)(x)
+# Bottleneck fix: reduce temporal size and channel count before flattening
+x = layers.Conv1D(128, 3, padding='same', name='conv4')(x)
+x = layers.BatchNormalization()(x)
+x = layers.Activation('relu')(x)
+x = layers.MaxPooling1D(2)(x)
+x = layers.Dropout(0.3)(x)
 
 
 x = layers.Flatten()(x)
