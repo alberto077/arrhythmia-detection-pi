@@ -2,6 +2,7 @@ import os
 import numpy as np
 import wfdb
 from collections import Counter
+from scipy.signal import butter, sosfiltfilt
 
 # Configuration / constants
 
@@ -30,6 +31,10 @@ half = win // 2
 NORMAL_SYMS = {'N', 'L', 'R', 'e', 'j'}
 VENT_SYMS   = {'V', 'E'}
 
+def bandpass_filter(data, lowcut=0.5, highcut=50.0, fs=fs, order=2):
+    sos = butter(order, [lowcut, highcut], btype='bandpass', fs=fs, output='sos')
+    return sosfiltfilt(sos, data)
+
 
 # Data download
 os.makedirs(data_dir, exist_ok=True)
@@ -46,8 +51,10 @@ for record in records:
 
     # Load the raw ECG waveform
     rec = wfdb.rdrecord(rec_path)
-    sig = rec.p_signal[:, 0].astype(np.float32)
+    raw_sig = rec.p_signal[:, 0].astype(np.float32)
 
+    # Apply Bandpass Filter to clean the signal
+    sig = bandpass_filter(raw_sig)
 
     # Load annotations for beat symbols and sample indices
     ann = wfdb.rdann(rec_path, 'atr')
