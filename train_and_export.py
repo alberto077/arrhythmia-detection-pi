@@ -1,80 +1,26 @@
 #!/usr/bin/env python3
-"""
-IMPROVED TRAINING SCRIPT
-========================
-Addresses architectural issues identified in diagnosis:
-
-1. Replaces GlobalAveragePooling with Flatten (preserves temporal information)
-2. Increases model capacity (64→128→256 filters)
-3. Adds more dense layers for better decision boundary
-4. Removes oversampling (uses natural distribution + class weights)
-5. Uses stratified validation split to ensure positives in validation
-
-This should achieve F1 > 0.5 on test set.
-"""
-
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, precision_recall_curve
 
-print("=" * 80)
-print("IMPROVED TRAINING - Architectural Fixes")
-print("=" * 80)
-
 # Load preprocessed data
 data = np.load('mitbih_windows.npz')
-X_train_orig = data['X_train']
-y_train_orig = data['y_train']
+X_train = data['X_train']
+y_train = data['y_train']
 X_val = data['X_val']
 y_val = data['y_val']
 X_test = data['X_test']
 y_test = data['y_test']
+class_weight = {0: float(data['class_weight_0']), 1: float(data['class_weight_1'])}
 
-# REMOVE OVERSAMPLING - use natural distribution with class weights
-# The oversampling created distribution mismatch with validation
-print(f"\n1. Dataset preparation (removing oversampling)...")
+print("Class weight:", class_weight)
+print("Train shape:", X_train.shape, y_train.shape)
+print("Val shape:  ", X_val.shape, y_val.shape)
+print("Test shape: ", X_test.shape, y_test.shape)
 
-X_all = data['X_all']
-y_all = data['y_all']
-rids_all = data['rids_all'].astype(str)
-train_recs = data['train_recs'].astype(str)
-
-# Re-extract training data at natural distribution
-train_mask = np.isin(rids_all, train_recs)
-X_train = X_all[train_mask]
-y_train = y_all[train_mask]
-
-print(f"   Training set (natural distribution):")
-print(f"      Total: {len(y_train)}")
-print(f"      Negative: {(y_train == 0).sum()} ({100 * (y_train == 0).sum() / len(y_train):.1f}%)")
-print(f"      Positive: {(y_train == 1).sum()} ({100 * (y_train == 1).sum() / len(y_train):.1f}%)")
-
-# Compute class weights for natural distribution
-from collections import Counter
-
-cnt = Counter(y_train.tolist())
-w0 = 1.0
-w1 = cnt[0] / max(1, cnt[1]) if cnt[1] > 0 else 1.0
-# Don't cap class weight - let it be as high as needed
-class_weight = {0: w0, 1: w1}
-
-print(f"   Class weights: {class_weight}")
-print(f"   (Positive class weight = {w1:.1f}x)")
-
-# Check validation set
-print(f"\n   Validation set:")
-print(f"      Total: {len(y_val)}")
-print(f"      Negative: {(y_val == 0).sum()} ({100 * (y_val == 0).sum() / len(y_val):.1f}%)")
-print(f"      Positive: {(y_val == 1).sum()} ({100 * (y_val == 1).sum() / len(y_val):.1f}%)")
-
-if (y_val == 1).sum() == 0:
-    print("   ⚠️  WARNING: Validation has no positives - metrics will be incomplete!")
-
-# BUILD IMPROVED ARCHITECTURE
-print(f"\n2. Building improved model...")
-
+# BUILD ARCHITECTURE
 inp = keras.Input(shape=(X_train.shape[1], 1), name='ecg_input')
 
 # Wider filters for better feature learning
@@ -97,9 +43,14 @@ x = layers.Activation('relu')(x)
 x = layers.MaxPooling1D(2)(x)
 x = layers.Dropout(0.3)(x)
 
-# CRITICAL: Replace GlobalAveragePooling with Flatten
-# GlobalAvgPool destroys temporal information (where in the 2-second window the QRS occurs)
-# Ventricular beats have TIMING differences (wider QRS at specific location)
+# # Bottleneck fix: reduce temporal size and channel count before flattening
+# x = layers.Conv1D(128, 3, padding='same', name='conv4')(x)
+# x = layers.BatchNormalization()(x)
+# x = layers.Activation('relu')(x)
+# x = layers.MaxPooling1D(2)(x)
+# x = layers.Dropout(0.3)(x)
+
+
 x = layers.Flatten()(x)
 
 # Deeper decision layers
@@ -127,13 +78,9 @@ model.compile(
 model.summary()
 
 total_params = model.count_params()
-print(f"\n   Total parameters: {total_params:,}")
-print(f"   (Previous model: 11,233 parameters)")
-print(f"   Increase: {total_params / 11233:.1f}x")
+print(f"Total parameters: {total_params:,}")
 
-# TRAINING
-print(f"\n3. Training improved model...")
-
+# Training
 callbacks = [
     keras.callbacks.ModelCheckpoint(
         'models/best.keras',
@@ -176,22 +123,36 @@ val_probs = model.predict(X_val, batch_size=1024, verbose=0).ravel()
 
 if (y_val == 1).sum() > 0:
     prec, rec, th = precision_recall_curve(y_val, val_probs)
-    f1 = 2 * prec * rec / (prec + rec + 1e-9)
-    best_idx = np.nanargmax(f1)
-    best_th = float(th[max(0, best_idx - 1)]) if len(th) > 0 else 0.5
 
-    print(f"   Optimal threshold: {best_th:.4f}")
-    print(f"   F1 at threshold: {f1[best_idx]:.4f}")
-    print(f"   Precision: {prec[best_idx]:.4f}")
-    print(f"   Recall: {rec[best_idx]:.4f}")
+    if len(th) > 0:
+        f1 = 2 * prec[:-1] * rec[:-1] / (prec[:-1] + rec[:-1] + 1e-9)
+        best_idx = np.nanargmax(f1)
+        best_th = float(th[best_idx])
+
+        print(f"Optimal threshold: {best_th:.4f}")
+        print(f"F1 at threshold: {f1[best_idx]:.4f}")
+        print(f"Precision: {prec[:-1][best_idx]:.4f}")
+        print(f"Recall: {rec[:-1][best_idx]:.4f}")
+    else:
+        best_th = 0.5
+        print(f"Using default threshold: {best_th}")
 else:
     best_th = 0.5
-    print(f"   Using default threshold: {best_th}")
+    print(f"Using default threshold: {best_th}")
 
 # TEST SET EVALUATION
 print(f"\n5. Final test set evaluation...")
 
 test_probs = model.predict(X_test, batch_size=1024, verbose=0).ravel()
+neg_probs = test_probs[y_test == 0]
+pos_probs = test_probs[y_test == 1]
+
+print("Negative probs:")
+print(f"  mean={neg_probs.mean():.4f} p90={np.quantile(neg_probs, 0.90):.4f} max={neg_probs.max():.4f}")
+
+if len(pos_probs) > 0:
+    print("Positive probs:")
+    print(f"  mean={pos_probs.mean():.4f} p10={np.quantile(pos_probs, 0.10):.4f} min={pos_probs.min():.4f}")
 test_pred = (test_probs >= best_th).astype(int)
 
 if (y_test == 1).sum() > 0:
@@ -230,17 +191,24 @@ def representative_dataset():
     pos_idx = np.where(y_train == 1)[0]
     neg_idx = np.where(y_train == 0)[0]
 
-    # Ensure positives are well-represented in calibration
-    n_pos = min(100, len(pos_idx))  # More positives than before
-    n_neg = 400
-
     rng = np.random.default_rng(0)
-    selected_pos = rng.choice(pos_idx, size=n_pos, replace=False)
-    selected_neg = rng.choice(neg_idx, size=n_neg, replace=False)
 
-    for i in np.concatenate([selected_pos, selected_neg]):
-        yield [X_train[i:i + 1].astype(np.float32)]
+    # Keep calibration balanced: same number of positives and negatives.
+    # Cap the size so we stay in the "small subset" range for TFLite calibration.
+    n = min(len(pos_idx), len(neg_idx), 100)
 
+    if n == 0:
+        # Fallback: if one class is missing, use up to 100 random training samples.
+        all_idx = np.arange(len(y_train))
+        chosen = rng.choice(all_idx, size=min(100, len(all_idx)), replace=False)
+    else:
+        chosen_pos = rng.choice(pos_idx, size=n, replace=False)
+        chosen_neg = rng.choice(neg_idx, size=n, replace=False)
+        chosen = np.concatenate([chosen_pos, chosen_neg])
+        rng.shuffle(chosen)
+
+    for i in chosen:
+        yield [X_train[i:i+1].astype(np.float32)]
 
 conv = tf.lite.TFLiteConverter.from_keras_model(model)
 conv.optimizations = [tf.lite.Optimize.DEFAULT]
@@ -259,9 +227,6 @@ with open("threshold.txt", "w") as f:
 print(f"   ✅ threshold.txt")
 
 # VALIDATION SET SUMMARY
-# Note: Record 105 is the VALIDATION set (used for threshold tuning above).
-# We do NOT re-evaluate it here to avoid confusion with the true test set (record 109).
-# The threshold was already selected based on validation performance in step 4.
 print(f"\n7. Summary of splits used:")
 print(f"   Train:      Records 100,102,103,108,112,113 (weights learned here)")
 print(f"   Validation: Record 105 (threshold tuned here, val_auc monitored)")
@@ -271,12 +236,4 @@ print("\n" + "=" * 80)
 print("TRAINING COMPLETE")
 print("=" * 80)
 print(f"\n✅ Models saved to models/")
-print(f"✅ Key architectural changes from v1:")
-print(f"   1. Removed oversampling (uses natural distribution + class weights)")
-print(f"   2. Increased capacity: {total_params:,} params (vs 11,233 original)")
-print(f"   3. Replaced GlobalAvgPool with Flatten (preserves QRS timing)")
-print(f"   4. Deeper architecture (64→128→256 filters)")
-print(f"\n✅ Evaluation:")
-print(f"   - Validation (record 105): threshold tuned in step 4")
-print(f"   - Test (record 109): held-out results in step 5")
-print("=" * 80)
+
