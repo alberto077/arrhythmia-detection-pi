@@ -15,8 +15,8 @@ records = ['100','101','102','103','104','105','106','107','108','109',
     '222','223','228','230','231','232','233','234']
 
 # Patient splits
-val_recs   = ['105']
-test_recs  = ['109']
+val_recs   = ['105', '124']
+test_recs  = ['109', '114', '205']
 train_recs = [r for r in records if r not in set(val_recs + test_recs)]
 
 # MIT-BIH Sampling rate (Hz)

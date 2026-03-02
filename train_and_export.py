@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -152,14 +151,14 @@ print(f"  mean={neg_probs.mean():.4f} p90={np.quantile(neg_probs, 0.90):.4f} max
 
 if len(pos_probs) > 0:
     print("Positive probs:")
-    print(f"  mean={pos_probs.mean():.4f} p10={np.quantile(pos_probs, 0.10):.4f} min={pos_probs.min():.4f}")
+    print(f"mean={pos_probs.mean():.4f} p10={np.quantile(pos_probs, 0.10):.4f} min={pos_probs.min():.4f}")
 test_pred = (test_probs >= best_th).astype(int)
 
 if (y_test == 1).sum() > 0:
     test_auc = roc_auc_score(y_test, test_probs)
-    print(f"   Test AUC: {test_auc:.4f}")
+    print(f"Test AUC: {test_auc:.4f}")
 else:
-    print(f"   ⚠️  Test set has no positives - cannot compute AUC")
+    print("Test set has no positives cannot compute AUC")
 
 cm = confusion_matrix(y_test, test_pred)
 print(f"\n   Confusion Matrix:")
@@ -168,14 +167,14 @@ print(f"\n   Classification Report:")
 print(classification_report(y_test, test_pred, digits=4))
 
 # EXPORT MODELS
-print(f"\n6. Exporting TFLite models...")
+print(f"\n6. Exporting TFLite models:")
 
 # Float32
 conv = tf.lite.TFLiteConverter.from_keras_model(model)
 tflite_float32 = conv.convert()
 with open("models/ecg_float32.tflite", "wb") as f:
     f.write(tflite_float32)
-print(f"   ✅ ecg_float32.tflite")
+print("Saved ecg_float32.tflite")
 
 # Dynamic range
 conv = tf.lite.TFLiteConverter.from_keras_model(model)
@@ -183,7 +182,7 @@ conv.optimizations = [tf.lite.Optimize.DEFAULT]
 tflite_dr = conv.convert()
 with open("models/ecg_dr.tflite", "wb") as f:
     f.write(tflite_dr)
-print(f"   ✅ ecg_dr.tflite")
+print("Saved ecg_dr.tflite")
 
 
 # Full INT8 with stratified representative dataset
@@ -219,21 +218,20 @@ conv.inference_output_type = tf.int8
 tflite_int8 = conv.convert()
 with open("models/ecg_int8.tflite", "wb") as f:
     f.write(tflite_int8)
-print(f"   ✅ ecg_int8.tflite")
+print("Saved ecg_int8.tflite")
 
 # Save threshold
 with open("threshold.txt", "w") as f:
     f.write(str(best_th))
-print(f"   ✅ threshold.txt")
+print("Saved threshold.txt")
 
 # VALIDATION SET SUMMARY
-print(f"\n7. Summary of splits used:")
-print(f"   Train:      Records 100,102,103,108,112,113 (weights learned here)")
-print(f"   Validation: Record 105 (threshold tuned here, val_auc monitored)")
-print(f"   Test:       Record 109 (held-out, evaluated once in step 5)")
+print("\n7. Summary of splits used:")
+print(f"   Train:      {train_recs}")
+print(f"   Validation: {val_recs}")
+print(f"   Test:       {test_recs}")
 
-print("\n" + "=" * 80)
-print("TRAINING COMPLETE")
-print("=" * 80)
-print(f"\n✅ Models saved to models/")
 
+
+print("\nTRAINING COMPLETE")
+print("\nModels saved to models/")
