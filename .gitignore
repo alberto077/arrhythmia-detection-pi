@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .venv/
+venv/
 
 # IDE & OS
 .idea/
@@ -15,13 +16,9 @@ data/
 testing/
 # Training artifacts
 *.keras
-models/best.keras
 models/*.h5
 
-# Optional model variants (keep only INT8)
+
+# Optional model variants
 models/ecg_float32.tflite
 models/ecg_dr.tflite
-
-# Debug tools
-diagnose_*.py
-*_improved.py

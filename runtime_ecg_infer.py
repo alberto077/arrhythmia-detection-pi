@@ -1,34 +1,20 @@
 import numpy as np
 import time
+import matplotlib.pyplot as plt
+from dynamic_threshold import DynamicThreshold
 
 try:
-    import tflite_runtime.interpreter as tflite
+    import ai_edge_litert.interpreter as tflite
 except ImportError:
-    import tensorflow as tf
-    tflite = tf.lite
-
-# Configuration
-MODEL_PATH = "models/ecg_int8.tflite"
-
-# Load threshold
-with open("threshold.txt", "r") as f:
-    THRESHOLD_OPTIMAL = float(f.read().strip())
-
-THRESHOLD_SAFE = 0.5  # Higher recall, lower precision (safer for medical)
-THRESHOLD_BALANCED = 0.7  # Balance between precision and recall
-
-# Choose which threshold to use
-THRESHOLD = THRESHOLD_OPTIMAL  # Change this as needed
-
-print(f"Loaded thresholds:")
-print(f"  Optimal (F1-max): {THRESHOLD_OPTIMAL:.4f}")
-print(f"  Safe (high recall): {THRESHOLD_SAFE:.4f}")
-print(f"  Balanced: {THRESHOLD_BALANCED:.4f}")
-print(f"  → Using: {THRESHOLD:.4f}\n")
+    print("ai_edge_litert not installed, trying legacy interpreter")
+    try:
+        import tflite_runtime.interpreter as tflite
+    except ImportError:
+        raise ImportError("No lightweight TFLite runtime found")
 
 
 class ECGDetector:
-    def __init__(self, model_path=MODEL_PATH):
+    def __init__(self, model_path: str):
         self.interpreter = tflite.Interpreter(model_path=model_path)
         self.interpreter.allocate_tensors()
 
@@ -61,42 +47,59 @@ class ECGDetector:
         # Run inference
         self.interpreter.invoke()
 
-        # Get output
+        # output
         y = self.interpreter.get_tensor(self.output_details[0]["index"])
         if self.output_details[0]["dtype"] == np.int8:
             y = (y.astype(np.float32) - self.output_zero_point) * self.output_scale
 
-        prob = float(y.reshape(-1)[0])
-        label = int(prob >= THRESHOLD)
-
-        return prob, label
+        return float(y.reshape(-1)[0])
 
 
-def evaluate_record(detector, X, y, record_name):
-    print(f"EVALUATING RECORD {record_name}")
+def evaluate_record(detector, dyn_thresh, X, y, record_name, verbose=False):
+    print(f"\nEVALUATING RECORD {record_name}")
+    print("=" * 40)
     print(f"Total windows: {len(y)}")
     print(f"  Negative (normal): {(y==0).sum()}")
     print(f"  Positive (ventricular): {(y==1).sum()}")
 
+    dyn_thresh.reset()
+
     preds = []
     probs = []
     times = []
+    dynamic_thresholds = []
 
     for i in range(len(X)):
         w = X[i, :, 0]
 
         start = time.time()
-        p, yhat = detector.predict(w)
-        elapsed = (time.time() - start) * 1000  # ms
+        prob = detector.predict(w)
+        result = dyn_threshold.update(prob)
+        elapsed = (time.time() - start) * 1000
 
-        probs.append(p)
-        preds.append(yhat)
+        probs.append(prob)
+        preds.append(1 if result['is_alert'] else 0)
         times.append(elapsed)
+        dynamic_thresholds.append(result['current_threshold'])
+
+        if verbose:
+            if dyn_thresh.is_warmup and (i + 1) % 10 == 0:
+                print(f"  Warmup: {i + 1}/{dyn_thresh.warmup_length} windows, "
+                       f"buffer={result['buffer_size']}")
+
+            if not dyn_thresh.is_warmup and (i + 1) % 100 == 0:
+                diag = dyn_thresh.get_diagnostics()
+                print(f"\n[Window {i + 1}] Diagnostics:")
+                print(f"Threshold: {diag['current_threshold']:.4f}"
+                      f"(P95={diag['buffer_p95']:.4f}")
+                print(f"Buffer: {diag['buffer_size']}/{diag['buffer_capacity']}")
+                print(f"Alerts: {diag['alert_count']}")
 
     preds = np.array(preds)
     probs = np.array(probs)
+    dynamic_thresholds = np.array(dynamic_thresholds)
 
-    # Compute metrics
+    # cm
     tn = int(((y==0) & (preds==0)).sum())
     fp = int(((y==0) & (preds==1)).sum())
     fn = int(((y==1) & (preds==0)).sum())
@@ -107,31 +110,42 @@ def evaluate_record(detector, X, y, record_name):
     rec = tp / (tp + fn) if (tp + fn) > 0 else 0
     f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0
 
-    print(f"\nResults (threshold={THRESHOLD:.4f}):")
-    print(f"  Confusion Matrix: [[TN={tn}, FP={fp}], [FN={fn}, TP={tp}]]")
-    print(f"  Accuracy:  {acc:.4f}")
-    print(f"  Precision: {prec:.4f}")
-    print(f"  Recall:    {rec:.4f}")
-    print(f"  F1:        {f1:.4f}")
+    avg_time = np.mean(times)
+    final_diag = dyn_thresh.get_diagnostics()
+
+    print("\nDYNAMIC THRESHOLD RESULTS")
+
+    print("\nThreshold Dynamics")
+
+    print(f"Final Threshold: {dynamic_thresholds[-1]:.4f}")
+    print(f"Operating Range: [{dynamic_thresholds.min():.4f} - {dynamic_thresholds.max():.4f}]")
+    print(f"Buffer P95: {final_diag['buffer_p95']:.4f}")
+
+    print("\nClinical Performance")
+    print(f"  TP: {tp}  FP: {fp}  FN: {fn}  TN: {tn}")
+    print(f"Accuracy: {acc:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+    print(f"Precision: {prec:.4f}")
+    print(f"Recall: {rec:.4f}")
+
+    print("\nHardware Metrics")
+    print(f"Avg Inference: {avg_time:.2f} ms/window")
 
     print(f"\nProbability distribution:")
-    print(f"  All:      mean={probs.mean():.4f}, std={probs.std():.4f}")
+    print(f"All: mean={probs.mean():.4f}, std={probs.std():.4f}")
     if (y==0).sum() > 0:
-        print(f"  Normal:   mean={probs[y==0].mean():.4f}, std={probs[y==0].std():.4f}")
+        print(f"Normal: mean={probs[y==0].mean():.4f}, std={probs[y==0].std():.4f}")
     if (y==1).sum() > 0:
-        print(f"  Ventri:   mean={probs[y==1].mean():.4f}, std={probs[y==1].std():.4f}")
+        print(f"Ventricular: mean={probs[y==1].mean():.4f}, std={probs[y==1].std():.4f}")
 
-    avg_time = np.mean(times)
-    print(f"\nInference time: {avg_time:.2f} ms/window (avg of {len(times)})")
-
-    return f1, prec, rec, avg_time
+    return tp, tn, fp, fn, avg_time, dynamic_thresholds, probs
 
 
 def threshold_sweep(detector, X, y, record_name):
     print(f"THRESHOLD SWEEP ON RECORD {record_name}")
 
     # Get all probabilities
-    probs = np.array([detector.predict(X[i, :, 0])[0] for i in range(len(X))])
+    probs = np.array([detector.predict(X[i, :, 0]) for i in range(len(X))])
 
     thresholds = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.98, THRESHOLD_OPTIMAL]
 
@@ -152,7 +166,7 @@ def threshold_sweep(detector, X, y, record_name):
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0
         f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0
 
-        marker = " ← CURRENT" if abs(th - THRESHOLD) < 0.01 else ""
+        marker = " ← CURRENT" if abs(th - GLOBAL_THRESHOLD) < 0.01 else ""
         marker = marker or (" ← OPTIMAL" if abs(th - THRESHOLD_OPTIMAL) < 0.01 else "")
         marker = marker or (" ← BEST" if f1 > best_f1 else "")
 
@@ -165,8 +179,75 @@ def threshold_sweep(detector, X, y, record_name):
     print(f"\nBest threshold: {best_th:.4f} (F1={best_f1:.4f})")
     return best_th, best_f1
 
+def plot_threshold_trace(probs, y_true, thresholds, record_name):
+
+    alerts = (probs >= thresholds).astype(int)
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 8), sharex=True)
+
+    # Top panel: Probabilities and threshold
+    ax1.plot(probs, label='Probability', alpha=0.7, linewidth=1)
+    ax1.plot(thresholds, label='Dynamic Threshold', linewidth=2, color='orange')
+
+    # Mark true ventricular beats
+    ventri_idx = np.where(y_true == 1)[0]
+    ax1.scatter(ventri_idx, probs[ventri_idx], color='red',
+                s=100, marker='x', label='True Ventricular', zorder=5)
+
+    # Mark alerts
+    alert_idx = np.where(alerts == 1)[0]
+    ax1.scatter(alert_idx, probs[alert_idx], color='red',
+                s=50, alpha=0.3, label='Alerts', zorder=4)
+
+    ax1.set_ylabel('Probability')
+    ax1.set_ylim([0, 1])
+    ax1.legend(loc='upper right')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_title(f'Dynamic Threshold Performance - Record {record_name}')
+
+    # Bottom panel: Threshold evolution
+    ax2.plot(thresholds, linewidth=2, color='orange')
+    ax2.set_xlabel('Window Index')
+    ax2.set_ylabel('Threshold Value')
+    ax2.set_ylim([0.3, 1.0])
+    ax2.grid(True, alpha=0.3)
+    ax2.axhline(y=0.40, color='gray', linestyle='--', label='Floor')
+    ax2.axhline(y=0.95, color='gray', linestyle='--', label='Ceil')
+    ax2.legend(loc='upper right')
+
+    plt.tight_layout()
+    plt.savefig(f'dynamic_threshold_record_{record_name}.png', dpi=150)
+    print(f"Saved plot: dynamic_threshold_record_{record_name}.png")
+    plt.close()
 
 if __name__ == "__main__":
+    # Config
+    MODEL_PATH = "models/ecg_int8.tflite"
+
+    with open("threshold.txt", "r") as f:
+        THRESHOLD_OPTIMAL = float(f.read().strip())
+
+    THRESHOLD_SAFE = 0.5
+    THRESHOLD_BALANCED = 0.7
+    GLOBAL_THRESHOLD = THRESHOLD_OPTIMAL
+
+    # Initialize dynamic threshold
+    dyn_threshold = DynamicThreshold(
+        global_threshold=GLOBAL_THRESHOLD,
+        buffer_size=150,
+       margin=0.05,
+        floor=0.40,
+        ceil=0.95,
+        warmup_length=50,
+        update_freq=10
+    )
+
+    print(f"Loaded thresholds:")
+    print(f"  Optimal (F1-max): {THRESHOLD_OPTIMAL:.4f}")
+    print(f"  Safe (high recall): {THRESHOLD_SAFE:.4f}")
+    print(f"  Balanced: {THRESHOLD_BALANCED:.4f}")
+    print(f"  Using: {GLOBAL_THRESHOLD:.4f}\n")
+
     # Load data
     data = np.load("mitbih_windows.npz", allow_pickle=True)
     X_all = data["X_all"]
@@ -177,26 +258,55 @@ if __name__ == "__main__":
     print(f"Loading model: {MODEL_PATH}")
     detector = ECGDetector(MODEL_PATH)
 
+    total_tp, total_fp, total_tn, total_fn = 0, 0, 0, 0
+    all_times = []
+
     # TEST ON SPECIFIC RECORD
-    TARGET_RECORD = "109"
-    mask = (rids_all == TARGET_RECORD)
-    X_target = X_all[mask]
-    y_target = y_all[mask]
+    TARGET_RECORDS = ["109", "205"]
+    RUN_THRESHOLD_SWEEP = False
+    RUN_PLOT = False
+    for TARGET_RECORD in TARGET_RECORDS:
+        mask = (rids_all == TARGET_RECORD)
+        X_target = X_all[mask]
+        y_target = y_all[mask]
 
-    # Main evaluation
-    f1, prec, rec, avg_time = evaluate_record(detector, X_target, y_target, TARGET_RECORD)
+        # Main eval
+        tp, tn, fp, fn, avg_time, dynamic_thresholds, probs = evaluate_record(detector,dyn_threshold, X_target, y_target, TARGET_RECORD)
 
-    # Threshold sweep (to find optimal threshold for this record)
-    best_th, best_f1 = threshold_sweep(detector, X_target, y_target, TARGET_RECORD)
+        total_tp += tp
+        total_fp += fp
+        total_tn += tn
+        total_fn += fn
+        all_times.append(avg_time)
 
-    # Summary
-    print("SUMMARY:")
-    print(f"Model: {MODEL_PATH}")
-    print(f"Record: {TARGET_RECORD} ({len(y_target)} windows, {(y_target==1).sum()} ventricular)")
-    print(f"\nPerformance at current threshold ({THRESHOLD:.4f}):")
-    print(f"  F1:        {f1:.4f}")
-    print(f"  Precision: {prec:.4f}")
-    print(f"  Recall:    {rec:.4f}")
-    print(f"Performance at optimal threshold ({best_th:.4f}):")
-    print(f"  F1:        {best_f1:.4f}")
-    print(f"Inference: {avg_time:.2f} ms/window")
+        if RUN_PLOT:
+            plot_threshold_trace(probs, y_target, dynamic_thresholds, TARGET_RECORD)
+
+        if RUN_THRESHOLD_SWEEP:
+            print("Threshold sweep (to find optimal threshold for this record")
+            best_th, best_f1 = threshold_sweep(detector, X_target, y_target, TARGET_RECORD)
+            print(f"Performance at optimal threshold ({best_th:.4f}):")
+            print(f"  F1:        {best_f1:.4f}")
+            print(f"Inference: {avg_time:.2f} ms/window")
+
+
+    print(f"\n\nFULL SUMMARY")
+    if (total_tp + total_fp) > 0 and (total_tp + total_tn) > 0:
+        mean_prec = total_tp / (total_tp + total_fp)
+        mean_rec = total_tp / (total_tp + total_fn)
+        mean_f1 = (2 * mean_prec * mean_rec / (mean_prec + mean_rec)
+                   if (mean_prec + mean_rec) > 0 else 0)
+        print(f"Micro Precision: {mean_prec:.4f}")
+        print(f"Micro Recall: {mean_rec:.4f}")
+        print(f"Micro F1: {mean_f1:.4f}")
+    else:
+        print("No positive predictions")
+
+    print(f"Avg Inference: {np.mean(all_times):.4f} ms/window")
+
+
+
+
+
+
+
