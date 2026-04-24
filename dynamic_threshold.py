@@ -7,7 +7,7 @@ class DynamicThreshold:
             self,
             global_threshold: float,
             buffer_size: int = 150,
-            margin: float = 0.05,
+            margin: float = 0.15,
             floor: float = 0.40,
             ceil: float = 0.95,
             warmup_length: int = 50,
