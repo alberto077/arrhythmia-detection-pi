@@ -131,6 +131,8 @@ if __name__ == "__main__":
 
     DS2 = [100, 103, 105, 111, 113, 117, 121, 123, 200, 202,
             210, 212, 213, 214, 219, 221, 222, 228, 231, 232, 233, 234]
+    INCART_RECORDS = [f'I{i:02d}' for i in range(1, 76)]
+
 
    
     f32_detector = ECGDetector("models/ecg_float32.tflite")
@@ -159,14 +161,14 @@ if __name__ == "__main__":
     print("\nEXP 6: INT8 + Adaptive")
     run_experiment("models/ecg_int8.tflite", X_test, y_test, rids_test, DS2, "adaptive", int8_th)
 
-    print("\nEXP 7: Float32 + Static")
-    run_experiment("models/ecg_float32.tflite", X_all_incart, y_all_incart, rids_all_incart, DS2, "static", f32_th)
+    print("\nEXP 7: Float32 + Static (INCART)")
+    run_experiment("models/ecg_float32.tflite", X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "static", f32_th)
 
-    print("\nEXP 8: INT8 + Static")
-    run_experiment("models/ecg_int8.tflite", X_all_incart, y_all_incart, rids_all_incart, DS2, "static", int8_th)
+    print("\nEXP 8: INT8 + Static (INCART)")
+    run_experiment("models/ecg_int8.tflite", X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "static", int8_th)
 
-    print("\nEXP 9: Float32 + Adaptive")
-    run_experiment("models/ecg_float32.tflite", X_all_incart, y_all_incart, rids_all_incart, DS2, "adaptive", f32_th)
+    print("\nEXP 9: Float32 + Adaptive (INCART)")
+    run_experiment("models/ecg_float32.tflite", X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "adaptive", f32_th)
 
-    print("\nEXP 10: INT8 + Adaptive")
-    run_experiment("models/ecg_int8.tflite", X_all_incart, y_all_incart, rids_all_incart, DS2, "adaptive", int8_th)
+    print("\nEXP 10: INT8 + Adaptive (INCART)")
+    run_experiment("models/ecg_int8.tflite", X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "adaptive", int8_th)
