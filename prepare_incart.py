@@ -31,8 +31,7 @@ for record in records:
     rec_path = os.path.join(data_dir, record)
 
     rec = wfdb.rdrecord(rec_path)
-    mlii_idx = rec.sig_name.index('MLII') if 'MLII' in rec.sig_name else 0
-    raw_sig = rec.p_signal[:, mlii_idx].astype(np.float32)
+    raw_sig = rec.p_signal[:, 1].astype(np.float32)
 
     sig_resampled = resample_poly(raw_sig, up=fs_target, down=fs_source).astype(np.float32)
 
