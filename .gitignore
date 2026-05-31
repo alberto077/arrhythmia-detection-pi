@@ -9,10 +9,14 @@ venv/
 .DS_Store
 
 # Data
-data/
+data/*
+!data/README.md
+outputs/*
+!outputs/README.md
 *.npz
 *.png
 *.npy
+/sweep_results*.csv
 
 # Debugging
 testing/
@@ -28,3 +32,4 @@ exp1-12*
 models/ecg_float32.tflite
 models/ecg_dr.tflite
 models/random_split/
+/best_dynamics.ipynb

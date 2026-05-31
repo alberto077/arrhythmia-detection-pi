@@ -3,33 +3,35 @@
 This project explores real-time ECG arrhythmia detection using quantized
 convolutional neural networks for low-power edge devices.
 
-The research goal is to show that arrhythmia detection can move from offline
-logger review to on-device inference that runs closer to the patient.
+The goal is to move arrhythmia detection from offline logger review toward
+on-device inference that runs closer to the patient.
 
-## Target Device
+## Quick Start
 
-- Raspberry Pi 5 Model B Rev
+Install dependencies with `uv`. The dependency groups are split so Raspberry Pi
+installs do not pull TensorFlow unless training dependencies are requested.
 
-## Dependencies
-
-- Training and analysis: `requirements.txt`
-- Edge/runtime inference: `requirements_edge.txt`
-
-## Setup
-
-Create a local Python environment and install the training dependencies:
+### Raspberry Pi / Edge Inference
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync --only-group edge
+uv run --group edge python scripts/evaluate.py --mode trace
 ```
 
-For Raspberry Pi or edge-only inference, install the smaller runtime
-dependency set instead:
+### Training Workstation
 
 ```bash
-pip install -r requirements_edge.txt
+uv sync --group train --group analysis
+uv run --group train python scripts/prepare_mitbih.py
+uv run --group train python scripts/prepare_incart.py
+uv run --group train python scripts/train.py
+uv run --group train python scripts/evaluate.py --mode experiments
+```
+
+### Analysis Notebooks
+
+```bash
+uv run --group analysis jupyter notebook
 ```
 
 ## Data
@@ -41,54 +43,24 @@ data/mitbih/
 data/incart/
 ```
 
-Generated window files are ignored by Git:
+Generated dataset windows are ignored by Git:
 
 ```text
 mitbih_windows.npz
 incart_windows.npz
 ```
 
-## Prepare Datasets
-
-Build the MIT-BIH training, validation, and test windows:
-
-```bash
-python3 prepare_mitbih.py
-```
-
-Build the INCART external evaluation windows:
-
-```bash
-python3 prepare_incart.py
-```
-
-## Train And Export
-
-Train the CNN and export Float32 and INT8 TFLite models:
-
-```bash
-python3 train_and_export.py
-```
-
-Expected model outputs:
-
-```text
-models/ecg_float32.tflite
-models/ecg_int8.tflite
-```
-
-Only `models/ecg_int8.tflite` is currently tracked as the deployable edge
-model.
+See `data/README.md` for the expected local data layout.
 
 ## Runtime Evaluation
 
-Run the runtime script with an explicit mode:
+Run the evaluation script with an explicit mode:
 
 ```bash
-python3 runtime_ecg_infer.py --mode trace
-python3 runtime_ecg_infer.py --mode sweep
-python3 runtime_ecg_infer.py --mode experiments
-python3 runtime_ecg_infer.py --mode all
+uv run --group edge python scripts/evaluate.py --mode trace
+uv run --group train python scripts/evaluate.py --mode sweep
+uv run --group train python scripts/evaluate.py --mode experiments
+uv run --group train python scripts/evaluate.py --mode all
 ```
 
 Modes:
@@ -98,18 +70,20 @@ Modes:
 - `experiments`: run static/adaptive evaluations across MIT-BIH and INCART.
 - `all`: run every runtime workflow.
 
-Generated plots, CSVs, NumPy files, and local model variants are ignored unless
-they are intentionally promoted into the repo.
-
 ## Current Layout
 
 ```text
-prepare_mitbih.py              Prepare MIT-BIH windows
-prepare_incart.py              Prepare INCART windows
-train_and_export.py            Train CNN and export TFLite models
-runtime_ecg_infer.py           Runtime evaluation and threshold experiments
-dynamic_threshold.py           Adaptive threshold logic
-experiments/                   Experiment notes
-CSV_analysis/                  Sweep analysis artifacts
-models/ecg_int8.tflite         Tracked deployable INT8 model
+scripts/                     Runnable workflows
+src/ecg_arrhythmia/          Reusable ECG runtime, model, and metric helpers
+models/ecg_int8.tflite       Tracked deployable INT8 model
+data/README.md               Local data layout notes
+outputs/README.md            Generated output notes
+docs/experiments/            Experiment notes
+docs/analysis/               Sweep analysis artifacts and notebooks
 ```
+
+## Legacy Requirements
+
+`requirements.txt` and `requirements_edge.txt` are kept temporarily during the
+`uv` migration. Prefer `pyproject.toml` and `uv.lock` once the lockfile has been
+generated and verified.
