@@ -11,14 +11,20 @@ venv/
 # Data
 data/
 *.npz
+*.png
+*.npy
 
-#Debugging
+# Debugging
 testing/
+training_tests/
+original_test_run/
+
 # Training artifacts
 *.keras
 models/*.h5
-
+exp1-12*
 
 # Optional model variants
 models/ecg_float32.tflite
 models/ecg_dr.tflite
+models/random_split/
