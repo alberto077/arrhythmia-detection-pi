@@ -1,6 +1,0 @@
-numpy
-tensorflow
-scikit-learn
-scipy
-wfdb
-matplotlib

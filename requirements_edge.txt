@@ -1,3 +1,0 @@
-numpy
-ai-edge-litert
-scikit-learn

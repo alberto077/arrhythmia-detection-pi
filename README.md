@@ -34,6 +34,8 @@ uv run --group train scripts/evaluate.py --mode experiments
 uv run --group analysis jupyter notebook
 ```
 
+Dependencies are managed through `pyproject.toml` and locked with `uv.lock`.
+
 ## Data
 
 Raw ECG records are expected under:
@@ -98,10 +100,3 @@ scripts/evaluate.py               Runtime evaluation, sweeps, and trace plots
 docs/experiments/                 Written experiment notes
 docs/analysis/                    Notebooks and curated sweep outputs
 ```
-
-
-## Legacy Requirements
-
-`requirements.txt` and `requirements_edge.txt` are kept temporarily during the
-`uv` migration. Prefer `pyproject.toml` and `uv.lock` once the lockfile has been
-generated and verified.
