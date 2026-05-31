@@ -13,6 +13,7 @@ class DynamicThreshold:
             warmup_length: int = 50,
             update_freq: int = 10,
             admit_ceil: float = 0.85,
+            verbose: bool = True,
     ):
         self.global_threshold = global_threshold
         self.buffer_size = buffer_size
@@ -22,6 +23,7 @@ class DynamicThreshold:
         self.warmup_length = warmup_length
         self.update_freq = update_freq
         self.admit_ceil = admit_ceil
+        self.verbose = verbose
 
         # Mutable state — all reset via .reset()
         self.buffer = deque(maxlen=buffer_size)
@@ -30,6 +32,7 @@ class DynamicThreshold:
         self.is_warmup = True
         self.last_threshold_update = 0
         self.alert_count = 0
+        self.threshold_history = []  # dict metadata from each threshold recompute
 
     def update(self, prob: float) -> dict:
         """Feed one probability and get back the current decision."""
@@ -76,6 +79,7 @@ class DynamicThreshold:
             'buffer_capacity': self.buffer_size,
             'buffer_p95': p95,
             'alert_count': self.alert_count,
+            'threshold_updates': len(self.threshold_history),
         }
 
     def reset(self):
@@ -85,28 +89,45 @@ class DynamicThreshold:
         self.is_warmup = True
         self.last_threshold_update = 0
         self.alert_count = 0
+        self.threshold_history = []
 
     def _recompute_threshold(self):
         if len(self.buffer) < 10:
             return
 
         buf = np.array(self.buffer)
-        p95 = np.percentile(buf, 95)
+        p95 = float(np.percentile(buf, 95))
+        raw = p95 + self.margin
+        new_threshold = float(np.clip(raw, self.floor, self.ceil))
 
-        new_threshold = p95 + self.margin
-        new_threshold = float(np.clip(new_threshold, self.floor, self.ceil))
+        if raw < self.floor:
+            clipped = "floor"
+        elif raw > self.ceil:
+            clipped = "ceil"
+        else:
+            clipped = None
 
+        prev = self.threshold
         self.threshold = new_threshold
         self.last_threshold_update = self.window_count
+        self.threshold_history.append({
+            "window": self.window_count,
+            "prev": prev,
+            "new": new_threshold,
+            "delta": new_threshold - prev,
+            "p95": p95,
+            "buf": len(self.buffer),
+            "clipped": clipped,
+        })
 
     def _exit_warmup(self):
         self.is_warmup = False
         self._recompute_threshold()
 
-        buf = np.array(self.buffer)
-        p95 = float(np.percentile(buf, 95))
-
-        print(f"[DynamicThreshold] Warmup complete after {self.window_count} windows")
-        print(f"  Baseline P95: {p95:.4f}")
-        print(f"  Initial threshold: {self.threshold:.4f}")
-        print(f"  Buffer size: {len(self.buffer)}")
+        if self.verbose:
+            buf = np.array(self.buffer)
+            p95 = float(np.percentile(buf, 95))
+            print(f"[DynamicThreshold] Warmup complete after {self.window_count} windows")
+            print(f"  Baseline P95: {p95:.4f}")
+            print(f"  Initial threshold: {self.threshold:.4f}")
+            print(f"  Buffer size: {len(self.buffer)}")

@@ -74,19 +74,18 @@ for record in records:
         y_list.append(label)
         rid_list.append(record)
 
-def rid_mapping (recs):
-    mask = np.isin(rids, recs)
-    return X[mask], y[mask]
-
-
 X = np.stack(X_list, dtype=np.float32)
 y = np.array(y_list, dtype=np.int64)
 rids = np.array(rid_list)
 
 
-X_train, y_train = rid_mapping(train_recs)
-X_val,   y_val   = rid_mapping(val_recs)
-X_test,  y_test  = rid_mapping(test_recs)
+train_mask = np.isin(rids, train_recs)
+val_mask = np.isin(rids, val_recs)
+test_mask = np.isin(rids, test_recs)
+
+X_train, y_train = X[train_mask], y[train_mask]
+X_val,   y_val   = X[val_mask], y[val_mask]
+X_test,  y_test  = X[test_mask], y[test_mask]
 
 X_train = X_train[..., None]
 X_val   = X_val[..., None]
@@ -103,7 +102,9 @@ np.savez_compressed(
     X_train=X_train, y_train=y_train,
     X_val=X_val, y_val=y_val,
     X_test=X_test, y_test=y_test,
-    rids_test=rids[np.isin(rids, test_recs)],
+    rids_train=rids[train_mask],
+    rids_eval=rids[val_mask],
+    rids_test=rids[test_mask],
     w0 =np.float32(w0),
     w1 =np.float32(w1),
 )
