@@ -1,5 +1,6 @@
 import argparse
 import csv
+import time
 from datetime import datetime
 import numpy as np
 from tqdm import tqdm
@@ -76,6 +77,9 @@ def run_experiment(detector, X, y, rids, records,
         X_rec = X[mask]
         y_rec = y[mask]
 
+        if len(y_rec) == 0:
+            continue
+
         if threshold_mode == "adaptive":
             dyn = DynamicThreshold(
                 global_threshold=static_th,
@@ -91,10 +95,13 @@ def run_experiment(detector, X, y, rids, records,
 
         actuals = []
         preds = []
+        times = []
         updates = 0
 
         for i in range(len(X_rec)):
+            start = time.time()
             prob = detector.predict(X_rec[i, :, 0])
+            elapsed = (time.time() - start) * 1000
 
             if threshold_mode == "static":
                 pred = 1 if prob >= static_th else 0
@@ -106,19 +113,91 @@ def run_experiment(detector, X, y, rids, records,
 
             actuals.append(int(y_rec[i]))
             preds.append(pred)
+            times.append(elapsed)
 
         metrics = binary_metrics(actuals, preds)
         per_record[record] = {
             "f1": metrics["f1"],
             "precision": metrics["precision"],
             "recall": metrics["recall"],
+            "tn": metrics["tn"],
             "tp": metrics["tp"],
             "fp": metrics["fp"],
             "fn": metrics["fn"],
+            "windows": len(actuals),
+            "avg_latency_ms": float(np.mean(times)) if times else 0.0,
             "threshold_updates": updates,
         }
 
     return per_record
+
+
+def summarize_experiment(per_record):
+    totals = {
+        "tn": 0,
+        "fp": 0,
+        "fn": 0,
+        "tp": 0,
+        "windows": 0,
+        "weighted_latency_ms": 0.0,
+        "threshold_updates": 0,
+    }
+
+    for metrics in per_record.values():
+        totals["tn"] += metrics["tn"]
+        totals["fp"] += metrics["fp"]
+        totals["fn"] += metrics["fn"]
+        totals["tp"] += metrics["tp"]
+        totals["windows"] += metrics["windows"]
+        totals["weighted_latency_ms"] += metrics["avg_latency_ms"] * metrics["windows"]
+        totals["threshold_updates"] += metrics["threshold_updates"]
+
+    tp = totals["tp"]
+    fp = totals["fp"]
+    fn = totals["fn"]
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    avg_latency = (
+        totals["weighted_latency_ms"] / totals["windows"]
+        if totals["windows"] > 0 else 0.0
+    )
+
+    return {
+        **totals,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "avg_latency_ms": avg_latency,
+        "records": len(per_record),
+    }
+
+
+def print_experiment_result(title, model_label, dataset_label,
+                            threshold_mode, static_th, per_record):
+    summary = summarize_experiment(per_record)
+
+    print(f"\n{title}")
+    print(f"Model: {model_label}")
+    print(f"Dataset: {dataset_label}")
+    print(f"Threshold mode: {threshold_mode}")
+    print(f"Threshold: {static_th:.4f}")
+    print(f"Records evaluated: {summary['records']}")
+    print(f"Windows evaluated: {summary['windows']}")
+    print("Confusion Matrix [[TN, FP], [FN, TP]]:")
+    print(np.array([
+        [summary["tn"], summary["fp"]],
+        [summary["fn"], summary["tp"]],
+    ]))
+    print(
+        "Arrhythmia metrics: "
+        f"precision={summary['precision']:.4f} "
+        f"recall={summary['recall']:.4f} "
+        f"f1={summary['f1']:.4f}"
+    )
+    print(f"Avg latency: {summary['avg_latency_ms']:.2f} ms/window")
+    if threshold_mode == "adaptive":
+        print(f"Threshold updates: {summary['threshold_updates']}")
 
 
 def plot_trace(record_name, f32_trace, int8_trace, floor=0.40, ceil=0.95):
@@ -318,26 +397,26 @@ if __name__ == "__main__":
             plot_trace(record, f32_trace, int8_trace)
 
     if run_exps:
-        print("\nEXP 3: Float32 + Static")
-        run_experiment(f32_detector, X_test, y_test, rids_test, DS2, "static", f32_th)
+        exp3 = run_experiment(f32_detector, X_test, y_test, rids_test, DS2, "static", f32_th)
+        print_experiment_result("EXP 3: Float32 + Static", "Float32", "MIT-BIH Test", "static", f32_th, exp3)
 
-        print("\nEXP 4: INT8 + Static")
-        run_experiment(int8_detector, X_test, y_test, rids_test, DS2, "static", int8_th)
+        exp4 = run_experiment(int8_detector, X_test, y_test, rids_test, DS2, "static", int8_th)
+        print_experiment_result("EXP 4: INT8 + Static", "INT8", "MIT-BIH Test", "static", int8_th, exp4)
 
-        print("\nEXP 5: Float32 + Adaptive")
-        run_experiment(f32_detector, X_test, y_test, rids_test, DS2, "adaptive", f32_th)
+        exp5 = run_experiment(f32_detector, X_test, y_test, rids_test, DS2, "adaptive", f32_th)
+        print_experiment_result("EXP 5: Float32 + Adaptive", "Float32", "MIT-BIH Test", "adaptive", f32_th, exp5)
 
-        print("\nEXP 6: INT8 + Adaptive")
-        run_experiment(int8_detector, X_test, y_test, rids_test, DS2, "adaptive", int8_th)
+        exp6 = run_experiment(int8_detector, X_test, y_test, rids_test, DS2, "adaptive", int8_th)
+        print_experiment_result("EXP 6: INT8 + Adaptive", "INT8", "MIT-BIH Test", "adaptive", int8_th, exp6)
 
-        print("\nEXP 7: Float32 + Static (INCART)")
-        run_experiment(f32_detector, X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "static", f32_th)
+        exp7 = run_experiment(f32_detector, X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "static", f32_th)
+        print_experiment_result("EXP 7: Float32 + Static (INCART)", "Float32", "INCART", "static", f32_th, exp7)
 
-        print("\nEXP 8: INT8 + Static (INCART)")
-        run_experiment(int8_detector, X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "static", int8_th)
+        exp8 = run_experiment(int8_detector, X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "static", int8_th)
+        print_experiment_result("EXP 8: INT8 + Static (INCART)", "INT8", "INCART", "static", int8_th, exp8)
 
-        print("\nEXP 9: Float32 + Adaptive (INCART)")
-        run_experiment(f32_detector, X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "adaptive", f32_th)
+        exp9 = run_experiment(f32_detector, X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "adaptive", f32_th)
+        print_experiment_result("EXP 9: Float32 + Adaptive (INCART)", "Float32", "INCART", "adaptive", f32_th, exp9)
 
-        print("\nEXP 10: INT8 + Adaptive (INCART)")
-        run_experiment(int8_detector, X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "adaptive", int8_th)
+        exp10 = run_experiment(int8_detector, X_all_incart, y_all_incart, rids_all_incart, INCART_RECORDS, "adaptive", int8_th)
+        print_experiment_result("EXP 10: INT8 + Adaptive (INCART)", "INT8", "INCART", "adaptive", int8_th, exp10)
