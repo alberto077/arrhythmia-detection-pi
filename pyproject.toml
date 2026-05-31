@@ -1,0 +1,37 @@
+[project]
+name = "ecg-arrhythmia-edge"
+version = "0.1.0"
+description = "Low-power ECG arrhythmia detection using quantized convolutional networks."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+edge = [
+    "ai-edge-litert",
+    "matplotlib",
+    "numpy",
+    "scikit-learn",
+    "tqdm",
+]
+train = [
+    "ai-edge-litert",
+    "matplotlib",
+    "numpy",
+    "scikit-learn",
+    "scipy",
+    "tensorflow",
+    "tqdm",
+    "wfdb",
+]
+analysis = [
+    "notebook",
+    "pandas",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ecg_arrhythmia"]
