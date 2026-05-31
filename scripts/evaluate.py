@@ -3,10 +3,11 @@ import csv
 from datetime import datetime
 import numpy as np
 from tqdm import tqdm
-from dynamic_threshold import DynamicThreshold
-import ai_edge_litert.interpreter as tflite
-from sklearn.metrics import confusion_matrix, precision_recall_curve
 import matplotlib.pyplot as plt
+
+from ecg_arrhythmia.inference import ECGDetector
+from ecg_arrhythmia.metrics import best_f1_threshold, binary_metrics
+from ecg_arrhythmia.threshold import DynamicThreshold
 
 
 def parse_args():
@@ -20,34 +21,6 @@ def parse_args():
         help="Which runtime workflow to execute.",
     )
     return parser.parse_args()
-
-
-class ECGDetector:
-    def __init__(self, model_path):
-        self.interpreter = tflite.Interpreter(model_path=model_path)
-        self.interpreter.allocate_tensors()
-        self.input_details = self.interpreter.get_input_details()
-        self.output_details = self.interpreter.get_output_details()
-        self.input_scale, self.input_zero_point = self.input_details[0]["quantization"]
-        self.output_scale, self.output_zero_point = self.output_details[0]["quantization"]
-
-    def predict(self, window_1d):
-        w = np.asarray(window_1d, dtype=np.float32)
-        w = (w - w.mean()) / (w.std() + 1e-8)
-        x = w[None, :, None].astype(np.float32)
-
-        if self.input_details[0]["dtype"] == np.int8:
-            x = x / self.input_scale + self.input_zero_point
-            x = np.clip(np.round(x), -128, 127).astype(np.int8)
-
-        self.interpreter.set_tensor(self.input_details[0]["index"], x)
-        self.interpreter.invoke()
-
-        y = self.interpreter.get_tensor(self.output_details[0]["index"])
-        if self.output_details[0]["dtype"] == np.int8:
-            y = (y.astype(np.float32) - self.output_zero_point) * self.output_scale
-
-        return float(y.reshape(-1)[0])
 
 
 def trace_record(detector, X_rec, y_rec, static_th,
@@ -87,6 +60,7 @@ def trace_record(detector, X_rec, y_rec, static_th,
         "preds": np.array(preds),
         "history": list(dyn.threshold_history),
     }
+
 
 def run_experiment(detector, X, y, rids, records,
                    threshold_mode, static_th,
@@ -133,19 +107,14 @@ def run_experiment(detector, X, y, rids, records,
             actuals.append(int(y_rec[i]))
             preds.append(pred)
 
-        cm = confusion_matrix(actuals, preds, labels=[0, 1])
-        _, fp, fn, tp = cm.ravel()
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-
+        metrics = binary_metrics(actuals, preds)
         per_record[record] = {
-            "f1": float(f1),
-            "precision": float(precision),
-            "recall": float(recall),
-            "tp": int(tp),
-            "fp": int(fp),
-            "fn": int(fn),
+            "f1": metrics["f1"],
+            "precision": metrics["precision"],
+            "recall": metrics["recall"],
+            "tp": metrics["tp"],
+            "fp": metrics["fp"],
+            "fn": metrics["fn"],
             "threshold_updates": updates,
         }
 
@@ -245,16 +214,12 @@ if __name__ == "__main__":
 
     f32_detector = ECGDetector("models/ecg_float32.tflite")
     f32_probs = np.array([f32_detector.predict(X_val[i, :, 0]) for i in range(len(X_val))])
-    prec, rec, th = precision_recall_curve(y_val, f32_probs)
-    f1 = 2 * prec[:-1] * rec[:-1] / (prec[:-1] + rec[:-1] + 1e-9)
-    f32_th = float(th[np.nanargmax(f1)])
+    f32_th = best_f1_threshold(y_val, f32_probs)
     print(f"Float32 threshold: {f32_th:.4f}")
 
     int8_detector = ECGDetector("models/ecg_int8.tflite")
     int8_probs = np.array([int8_detector.predict(X_val[i, :, 0]) for i in range(len(X_val))])
-    prec, rec, th = precision_recall_curve(y_val, int8_probs)
-    f1 = 2 * prec[:-1] * rec[:-1] / (prec[:-1] + rec[:-1] + 1e-9)
-    int8_th = float(th[np.nanargmax(f1)])
+    int8_th = best_f1_threshold(y_val, int8_probs)
     print(f"INT8 threshold: {int8_th:.4f}")
 
 
