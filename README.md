@@ -15,17 +15,17 @@ installs do not pull TensorFlow unless training dependencies are requested.
 
 ```bash
 uv sync --only-group edge
-uv run --group edge python scripts/evaluate.py --mode trace
+uv run --group edge scripts/evaluate.py --mode trace
 ```
 
 ### Training Workstation
 
 ```bash
 uv sync --group train --group analysis
-uv run --group train python scripts/prepare_mitbih.py
-uv run --group train python scripts/prepare_incart.py
-uv run --group train python scripts/train.py
-uv run --group train python scripts/evaluate.py --mode experiments
+uv run --group train scripts/prepare_mitbih.py
+uv run --group train scripts/prepare_incart.py
+uv run --group train scripts/train.py
+uv run --group train scripts/evaluate.py --mode experiments
 ```
 
 ### Analysis Notebooks
@@ -57,10 +57,10 @@ See `data/README.md` for the expected local data layout.
 Run the evaluation script with an explicit mode:
 
 ```bash
-uv run --group edge python scripts/evaluate.py --mode trace
-uv run --group train python scripts/evaluate.py --mode sweep
-uv run --group train python scripts/evaluate.py --mode experiments
-uv run --group train python scripts/evaluate.py --mode all
+uv run --group edge scripts/evaluate.py --mode trace
+uv run --group train scripts/evaluate.py --mode sweep
+uv run --group train scripts/evaluate.py --mode experiments
+uv run --group train scripts/evaluate.py --mode all
 ```
 
 Modes:
@@ -81,6 +81,24 @@ outputs/README.md            Generated output notes
 docs/experiments/            Experiment notes
 docs/analysis/               Sweep analysis artifacts and notebooks
 ```
+
+## Contributor Entry Points
+
+Start with the file that matches the kind of change you want to make:
+
+```text
+src/ecg_arrhythmia/model.py       Model architectures and TFLite export helpers
+src/ecg_arrhythmia/threshold.py   Adaptive threshold algorithm
+src/ecg_arrhythmia/inference.py   TFLite runtime wrapper
+src/ecg_arrhythmia/metrics.py     Threshold selection and binary metrics
+scripts/prepare_mitbih.py         MIT-BIH preprocessing and split metadata
+scripts/prepare_incart.py         INCART preprocessing and resampling
+scripts/train.py                  Main training/export workflow
+scripts/evaluate.py               Runtime evaluation, sweeps, and trace plots
+docs/experiments/                 Written experiment notes
+docs/analysis/                    Notebooks and curated sweep outputs
+```
+
 
 ## Legacy Requirements
 
